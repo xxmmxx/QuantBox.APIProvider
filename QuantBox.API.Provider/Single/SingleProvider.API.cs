@@ -16,11 +16,22 @@ namespace QuantBox.APIProvider.Single
 {
     public partial class SingleProvider
     {
-        static SingleProvider() {
+        static SingleProvider()
+        {
             NLog.LogManager.Configuration = new NLog.Config.XmlLoggingConfiguration(Path.Combine(PathHelper.RootPath.LocalPath, "NLog.config"), true);
         }
+        public DelegateOnRspQryInvestorPosition OnRspQryInvestorPosition { get; set; }
+        public DelegateOnRspQryTradingAccount OnRspQryTradingAccount { get; set; }
+        public DelegateOnRtnInstrumentStatus OnRtnInstrumentStatus { get; set; }
+        public DelegateOnRtnOrder OnRtnOrder { get; set; }
+        public DelegateOnRtnTrade OnRtnTrade { get; set; }
+
+        public DelegateOnRspQryOrder OnRspQryOrder { get; set; }
+        public DelegateOnRspQryTrade OnRspQryTrade { get; set; }
+
         //记录合约列表,从实盘合约名到对象的映射
         private readonly Dictionary<string, InstrumentField> _dictInstruments = new Dictionary<string, InstrumentField>();
+        private readonly Dictionary<string, InstrumentStatusField> _dictInstrumentsStatus = new Dictionary<string, InstrumentStatusField>();
 
         public static int GetDate(DateTime dt)
         {
@@ -53,8 +64,8 @@ namespace QuantBox.APIProvider.Single
             }
 
             _dictInstruments[instrument.Symbol] = instrument;
-            
-            if(bIsLast)
+
+            if (bIsLast)
             {
                 (sender as XApi).GetLog().Info("合约列表已经接收完成,共 {0} 条", _dictInstruments.Count);
             }
@@ -65,10 +76,19 @@ namespace QuantBox.APIProvider.Single
             if (size1 <= 0)
             {
                 (sender as XApi).GetLog().Info("OnRspQryTradingAccount");
-                return;
+            }
+            else
+            {
+                if (IsLogOnRspQryTradingAccount)
+                    (sender as XApi).GetLog().Info("OnRspQryTradingAccount:" + account.ToFormattedString());
             }
 
-            (sender as XApi).GetLog().Info("OnRspQryTradingAccount:" + account.ToFormattedString());
+            // 由策略来收回报
+            if (OnRspQryTradingAccount != null)
+                OnRspQryTradingAccount(sender, ref account, size1, bIsLast);
+
+            if (size1 <= 0)
+                return;
 
             if (!IsConnected)
                 return;
@@ -115,10 +135,20 @@ namespace QuantBox.APIProvider.Single
             if (size1 <= 0)
             {
                 (sender as XApi).GetLog().Info("OnRspQryInvestorPosition");
-                return;
+            }
+            else if (position.Position != 0)
+            {
+                // UFX中已经过期的持仓也会推送，所以这里过滤一下不显示
+                if (IsLogOnRspQryInvestorPosition)
+                    (sender as XApi).GetLog().Info("OnRspQryInvestorPosition:" + position.ToFormattedString());
             }
 
-            (sender as XApi).GetLog().Info("OnRspQryInvestorPosition:" + position.ToFormattedString());
+            // 由策略来收回报
+            if (OnRspQryInvestorPosition != null)
+                OnRspQryInvestorPosition(sender, ref position, size1, bIsLast);
+
+            if (size1 <= 0)
+                return;
 
             if (!IsConnected)
                 return;
@@ -135,7 +165,7 @@ namespace QuantBox.APIProvider.Single
                 position.AccountID, this.id, this.id);
 
             ad.Fields.Add(AccountDataField.SYMBOL, item.Symbol);
-            ad.Fields.Add(AccountDataField.EXCHANGE,item.Exchange);
+            ad.Fields.Add(AccountDataField.EXCHANGE, item.Exchange);
             ad.Fields.Add(AccountDataField.QTY, item.Qty);
             ad.Fields.Add(AccountDataField.LONG_QTY, item.LongQty);
             ad.Fields.Add(AccountDataField.SHORT_QTY, item.ShortQty);
@@ -153,7 +183,7 @@ namespace QuantBox.APIProvider.Single
             }
         }
 
-        private void OnRspQrySettlementInfo(object sender, ref SettlementInfoClass settlementInfo, int size1, bool bIsLast)
+        private void OnRspQrySettlementInfo_callback(object sender, ref SettlementInfoClass settlementInfo, int size1, bool bIsLast)
         {
             if (size1 <= 0)
             {
@@ -184,10 +214,14 @@ namespace QuantBox.APIProvider.Single
             if (size1 <= 0)
             {
                 (sender as XApi).GetLog().Info("OnRspQryTrade");
-                return;
-            }
 
-            (sender as XApi).GetLog().Info("OnRspQryTrade:" + trade.ToFormattedString());
+            }
+            else
+            {
+                (sender as XApi).GetLog().Info("OnRspQryTrade:" + trade.ToFormattedString());
+            }
+            if (OnRspQryTrade != null)
+                OnRspQryTrade(this, ref trade, size1, bIsLast);
         }
 
         private void OnRspQryOrder_callback(object sender, ref OrderField order, int size1, bool bIsLast)
@@ -195,10 +229,36 @@ namespace QuantBox.APIProvider.Single
             if (size1 <= 0)
             {
                 (sender as XApi).GetLog().Info("OnRspQryOrder");
-                return;
             }
+            else
+            {
+                (sender as XApi).GetLog().Info("OnRspQryOrder:" + order.ToFormattedString());
+            }
+            if (OnRspQryOrder != null)
+                OnRspQryOrder(this, ref order, size1, bIsLast);
+        }
 
-            (sender as XApi).GetLog().Info("OnRspQryOrder:" + order.ToFormattedString());
+        private void OnRtnInstrumentStatus_callback(object sender, ref InstrumentStatusField instrumentStatus)
+        {
+            if (OnRtnInstrumentStatus != null)
+                OnRtnInstrumentStatus(sender, ref instrumentStatus);
+
+            // 记录下来，后期可能要用到
+            _dictInstrumentsStatus[instrumentStatus.Symbol] = instrumentStatus;
+
+            // 合约状态信息太多了，也不关心，这里屏蔽显示
+            if (IsLogOnRtnInstrumentStatus)
+                (sender as XApi).GetLog().Info("OnRtnInstrumentStatus:" + instrumentStatus.ToFormattedString());
+        }
+
+        public InstrumentStatusField GetInstrumentStatus(string symbol)
+        {
+            InstrumentStatusField instrumentStatus;
+            if (_dictInstrumentsStatus.TryGetValue(symbol, out instrumentStatus))
+            {
+                return instrumentStatus;
+            }
+            return instrumentStatus;
         }
     }
 }

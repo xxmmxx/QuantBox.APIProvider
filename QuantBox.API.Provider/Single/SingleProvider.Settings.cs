@@ -22,10 +22,12 @@ namespace QuantBox.APIProvider.Single
         private const string CATEGORY_QUOTE_REQUEST = "Settings - QuoteRequest";
         private const string CATEGORY_INSTRUMENT = "Settings - Instrument";
         private const string CATEGORY_HISTORICAL_DATA = "Settings - HistoricalData";
-        
+        private const string CATEGORY_LOG_INFO = "Settings - Log Info";
+
         private bool _enableEmitData;
         private bool _emitBidAsk;
         private bool _emitBidAskFirst;
+        private bool _emitLevel2Snapshot;
 
 
         #region 行情配置
@@ -53,6 +55,13 @@ namespace QuantBox.APIProvider.Single
         {
             get { return _emitBidAskFirst; }
             set { _emitBidAskFirst = value; }
+        }
+        [Category(CATEGORY_MARKETDATA)]
+        [Description("【行情】触发OnLevel2Snapshot事件")]
+        public bool EmitLevel2Snapshot
+        {
+            get { return _emitLevel2Snapshot; }
+            set { _emitLevel2Snapshot = value; }
         }
 
         #endregion
@@ -124,16 +133,7 @@ namespace QuantBox.APIProvider.Single
         [Category(CATEGORY_COMMON)]
         [Description("配置文件路径")]
         [Editor(typeof(System.Windows.Forms.Design.FolderNameEditor), typeof(UITypeEditor))]
-        public string ConfigPath
-        {
-            get { return _configPath; }
-            set
-            {
-                _configPath = value;
-                Load();
-            }
-        }
-        private string _configPath;
+        public string ConfigPath { get; set; }
 
         [Category(CATEGORY_COMMON)]
         [Description("交易时段列表，当前时间在这些列表中将启用重连机制，不在此列表中将主动断开，列表为空将不处理")]
@@ -173,11 +173,21 @@ namespace QuantBox.APIProvider.Single
         [Category(CATEGORY_HISTORICAL_DATA)]
         [Description("【历史】是否触发EmitHistoricalData事件")]
         [DisplayName("EmitHistoricalData")]
-        public bool EnableEmitHistoricalData { get; set; }
+        public bool EnablEmitHistoricalData { get; set; }
 
         [Category(CATEGORY_HISTORICAL_DATA)]
         [Description("【历史】是否过滤数据日期和时间")]
         public bool FilterDateTime { get; set; }
         #endregion
+
+        [Category(CATEGORY_LOG_INFO)]
+        [Description("【日志】是否显示OnRspQryInvestorPosition记录")]
+        public bool IsLogOnRspQryInvestorPosition { get; set; }
+        [Category(CATEGORY_LOG_INFO)]
+        [Description("【日志】是否显示OnRspQryTradingAccount记录")]
+        public bool IsLogOnRspQryTradingAccount { get; set; }
+        [Category(CATEGORY_LOG_INFO)]
+        [Description("【日志】是否显示OnRtnInstrumentStatus记录")]
+        public bool IsLogOnRtnInstrumentStatus { get; set; }
     }
 }

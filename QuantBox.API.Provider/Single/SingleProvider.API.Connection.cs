@@ -6,42 +6,42 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
-using XAPI.Callback;
 using XAPI;
 using NLog;
 using QuantBox.Extensions;
+using System.Threading;
 
 namespace QuantBox.APIProvider.Single
 {
-/*
-    插件状态分解
+    /*
+        插件状态分解
 
-    人为：
-    用户主动连接，1.连接成功，2连接失败，3，连接成功登录失败，4.登录成功，但初始化失败
-    用户主动断开，
-    定时：
-    定时连接
-    定时断开
-    其它：
-    网络连上
-    网络断开
+        人为：
+        用户主动连接，1.连接成功，2连接失败，3，连接成功登录失败，4.登录成功，但初始化失败
+        用户主动断开，
+        定时：
+        定时连接
+        定时断开
+        其它：
+        网络连上
+        网络断开
 
 
-        */
-/*
- * OQ里正在断开连接不能轻易用，因为会导致右键时不能连接也不能断开
-*/
+            */
+    /*
+     * OQ里正在断开连接不能轻易用，因为会导致右键时不能连接也不能断开
+    */
 
     public partial class SingleProvider
     {
         // 实际的连接，由这个来
-        internal XApi _TdApi;
-        internal XApi _MdApi;
-        internal XApi _L2Api;
-        internal XApi _QuoteRequestApi;
-        internal XApi _HdApi;
-        internal XApi _ItApi;
-        internal XApi _QueryApi;
+        internal IXApi _TdApi;
+        internal IXApi _MdApi;
+        internal IXApi _L2Api;
+        internal IXApi _QuoteRequestApi;
+        internal IXApi _HdApi;
+        internal IXApi _ItApi;
+        internal IXApi _QueryApi;
 
         private void _Connect(bool bFromUI)
         {
@@ -80,7 +80,7 @@ namespace QuantBox.APIProvider.Single
                 {
                     if (item.UseType > 0)
                     {
-                        XApi api = ConnectToApi(item);
+                        IXApi api = ConnectToApi(item);
                         assign(item, api);
                     }
                     else
@@ -134,78 +134,91 @@ namespace QuantBox.APIProvider.Single
         }
 
 
-        private int nDisconnectCount = 0;
-        void _Timer_Elapsed(object sender, System.Timers.ElapsedEventArgs e)
+        private void CheckConnection(System.Timers.ElapsedEventArgs e)
         {
-            lock(this)
+            do
             {
-                _Timer.Enabled = false;
+                // 列表为空，表示不处理。这时没有自动重连
+                if (SessionTimeList == null || SessionTimeList.Count == 0)
+                    break;
 
-                do
+                var stl = SessionTimeList.Where(x => x.Enable).ToList();
+                if (stl.Count == 0)
+                    break;
+
+                bool bTryConnect = true;
+
+                SessionTimeItem st_current = null;
+                SessionTimeItem st_next = null;
+                foreach (var st in stl)
                 {
-                    // 列表为空，表示不处理。这时没有自动重连
-                    if (SessionTimeList == null || SessionTimeList.Count == 0)
-                        break;
+                    // 如果当前时间在交易范围内，要开启重连
+                    // 如果当前时间不在交易范围内，要主动断开
+                    TimeSpan ts = e.SignalTime.TimeOfDay;
+                    if (!st.Enable)
+                        continue;
 
-                    bool bTryConnect = true;
-
-                    SessionTimeItem st_current = null;
-                    SessionTimeItem st_next = null;
-                    foreach (var st in SessionTimeList.ToList())
+                    if (ts < st.SessionStart)
                     {
-                        // 如果当前时间在交易范围内，要开启重连
-                        // 如果当前时间不在交易范围内，要主动断开
-                        TimeSpan ts = e.SignalTime.TimeOfDay;
-                        if (ts < st.SessionStart)
-                        {
-                            // 停
-                            bTryConnect = false;
-                            st_next = st;
-                        }
-                        else if (ts <= st.SessionEnd)
-                        {
-                            // 启动
-                            bTryConnect = true;
-                            st_current = st;
-                            break;
-                        }
-                        else
-                        {
-                            // 停
-                            bTryConnect = false;
-                            st_next = st;
-                        }
+                        // 停
+                        bTryConnect = false;
+                        st_next = st;
                     }
-
-                    if (bTryConnect)
+                    else if (ts <= st.SessionEnd)
                     {
-                        // 没有连接要连上，有连接要设置时间
-                        if (!IsConnected)
-                        {
-                            xlog.Info("当前[{0}]在交易时段[{1}]，主动连接", e.SignalTime.TimeOfDay, st_current);
-                            _Connect(false);
-                        }
-
-                        // 初始化查询间隔
-                        SetApiReconnectInterval(_ReconnectInterval);
-
-                        nDisconnectCount = 0;
+                        // 启动
+                        bTryConnect = true;
+                        st_current = st;
+                        break;
                     }
                     else
                     {
-                        // 关闭查询间隔
-                        SetApiReconnectInterval(0);
-                        // 由于定时器设置的是20秒，所以这里正好是5分钟显示一次
-                        if (nDisconnectCount % (3*5) == 0)
-                        {
-                            xlog.Info("当前[{0}]在非交易时段，主动断开连接，下次要连接的时段为[{1}]", e.SignalTime.TimeOfDay, st_next);
-
-                            // 要断开连接
-                            _Disconnect(false);
-                        }
-                        ++nDisconnectCount;
+                        // 停
+                        bTryConnect = false;
+                        st_next = st;
                     }
-                } while (false);
+                }
+
+                if (bTryConnect)
+                {
+                    // 没有连接要连上，有连接要设置时间
+                    if (!IsConnected)
+                    {
+                        xlog.Info("当前[{0}]在交易时段[{1}]，主动连接", e.SignalTime.TimeOfDay, st_current);
+                        _Connect(false);
+                    }
+
+                    // 初始化查询间隔
+                    SetApiReconnectInterval(_ReconnectInterval);
+
+                    nDisconnectCount = 0;
+                }
+                else
+                {
+                    // 关闭查询间隔
+                    SetApiReconnectInterval(0);
+                    // 由于定时器设置的是20秒，所以这里正好是5分钟显示一次
+                    if (nDisconnectCount % (3 * 5) == 0)
+                    {
+                        xlog.Info("当前[{0}]在非交易时段，主动断开连接，下次要连接的时段为[{1}]", e.SignalTime.TimeOfDay, st_next);
+
+                        // 要断开连接
+                        _Disconnect(false);
+                    }
+                    ++nDisconnectCount;
+                }
+            } while (false);
+        }
+
+
+        private int nDisconnectCount = 0;
+        void _Timer_Elapsed(object sender, System.Timers.ElapsedEventArgs e)
+        {
+            lock (this)
+            {
+                _Timer.Enabled = false;
+
+                CheckConnection(e);
 
                 // 查询持仓和资金
                 QueryAccountPosition_OnTimer();
@@ -225,16 +238,16 @@ namespace QuantBox.APIProvider.Single
                 {
                     if (userLogin.RawErrorID != 0)
                     {
-                        (sender as XApi).GetLog().Info("{0}:{1}", status, userLogin.ToFormattedStringShort());
+                        (sender as IXApi).GetLog().Info("{0}:{1}", status, userLogin.ToFormattedStringShort());
                     }
                     else
                     {
-                        (sender as XApi).GetLog().Info("{0}:{1}", status, userLogin.ToFormattedStringLong());
+                        (sender as IXApi).GetLog().Info("{0}:{1}", status, userLogin.ToFormattedStringLong());
                     }
                 }
                 else
                 {
-                    (sender as XApi).GetLog().Info("{0}", status);
+                    (sender as IXApi).GetLog().Info("{0}", status);
                 }
 
                 switch (status)
@@ -259,7 +272,7 @@ namespace QuantBox.APIProvider.Single
             {
                 if (item.UseType > 0)
                 {
-                    if(!IsApiConnected(item.Api))
+                    if (!IsApiConnected(item.Api))
                     {
                         bCheckOk = false;
                         break;
@@ -268,10 +281,11 @@ namespace QuantBox.APIProvider.Single
             }
 
             // 每个连接都检查是否连上，如果连上，开始进行一些基本的查询
-            if(bCheckOk)
+            if (bCheckOk)
             {
                 base.Status = ProviderStatus.Connected;
 
+                // 这个查询不能太快，否则CTP报错
                 QueryAccountPositionInstrument_Logined();
             }
         }
@@ -284,7 +298,7 @@ namespace QuantBox.APIProvider.Single
              3.主动断开连接
              4.被动断开，需要重连
              */
-            switch(base.Status)
+            switch (base.Status)
             {
                 case ProviderStatus.Connected:
                     // 以前连接成功了，现在需要试着重连
@@ -302,7 +316,7 @@ namespace QuantBox.APIProvider.Single
 
 
         #region XApi小功能
-        private void assign(ApiItem item, XApi api)
+        private void assign(ApiItem item, IXApi api)
         {
             if ((item.UseType & ApiType.MarketData) == ApiType.MarketData)
             {
@@ -334,7 +348,7 @@ namespace QuantBox.APIProvider.Single
             }
         }
 
-        public XApi GetXApi(ApiType type)
+        public IXApi GetXApi(ApiType type)
         {
             switch (type)
             {
@@ -355,32 +369,22 @@ namespace QuantBox.APIProvider.Single
             }
         }
 
-        private XApi ConnectToApi(ApiItem item)
+        private IXApi ConnectToApi(ApiItem item)
         {
             //lock (this)
             {
                 DisconnectToApi(item);
 
-                XApi api = item.Api;
+                IXApi api = item.Api;
 
                 if (api == null)
                 {
-                    api = new XApi(PathHelper.MakeAbsolutePath(item.DllPath));
+                    api = XApiHelper.CreateInstance(item.TypeName, item.DllPath);
                     item.Api = api;
                 }
 
                 api.Server = ServerList[item.Server].ToStruct();
-                if (item.UserList.Count > 0)
-                {
-                    foreach (var it in item.UserList)
-                    {
-                        api.UserList.Add(it.ToStruct());
-                    }
-                }
-                else
-                {
-                    api.User = UserList[item.User].ToStruct();
-                }
+                api.User = UserList[item.User].ToStruct();
 
                 // 更新Log名字，这样在日志中可以进行识别
                 api.Log = LogManager.GetLogger(string.Format("{0}.{1}.{2}", Name, item.LogPrefix, api.User.UserID));
@@ -412,7 +416,8 @@ namespace QuantBox.APIProvider.Single
                 api.OnRspQryHistoricalTicks = OnRspQryHistoricalTicks_callback;
                 api.OnRspQryHistoricalBars = OnRspQryHistoricalBars_callback;
 
-                api.OnRspQrySettlementInfo = OnRspQrySettlementInfo;
+                api.OnRspQrySettlementInfo = OnRspQrySettlementInfo_callback;
+                api.OnRtnInstrumentStatus = OnRtnInstrumentStatus_callback;
 
                 api.Connect();
 
@@ -423,11 +428,11 @@ namespace QuantBox.APIProvider.Single
 
         private void DisconnectToApi(ApiItem item)
         {
-            if(item.Api != null)
+            if (item.Api != null)
             {
                 // 直接销毁
                 _DisconnectToApi(item.Api);
-                
+
                 //// 在线程中销毁
                 //Task task = Task.Factory.StartNew(
                 //    ()=> { _DisconnectToApi(item.Api); }
@@ -437,7 +442,7 @@ namespace QuantBox.APIProvider.Single
             }
         }
 
-        private void _DisconnectToApi(XApi api)
+        private void _DisconnectToApi(IXApi api)
         {
             try
             {
@@ -460,7 +465,7 @@ namespace QuantBox.APIProvider.Single
             }
         }
 
-        private bool IsApiConnected(XApi api)
+        private bool IsApiConnected(IXApi api)
         {
             return (api != null && api.IsConnected);
         }
@@ -492,17 +497,17 @@ namespace QuantBox.APIProvider.Single
         #region 其它非关键功能
         private void OnRtnError_callback(object sender, ref ErrorField error)
         {
-            (sender as XApi).GetLog().Error("OnRtnError:" + error.ToFormattedString());
+            (sender as IXApi).GetLog().Error("OnRtnError:" + error.ToFormattedString());
         }
 
         private void OnLog_callback(object sender, ref LogField log)
         {
-            (sender as XApi).GetLog().Info("OnLog:" + log.ToFormattedString());
+            (sender as IXApi).GetLog().Info("OnLog:" + log.ToFormattedString());
         }
 
         private void OnRtnQuoteRequest_callback(object sender, ref QuoteRequestField quoteRequest)
         {
-            (sender as XApi).GetLog().Info("OnRtnQuoteRequest:" + quoteRequest.ToFormattedString());
+            (sender as IXApi).GetLog().Info("OnRtnQuoteRequest:" + quoteRequest.ToFormattedString());
 
             MarketDataRecord record;
             if (!marketDataRecords.TryGetValue(quoteRequest.Symbol, out record))
@@ -510,40 +515,62 @@ namespace QuantBox.APIProvider.Single
                 return;
             }
 
-            NewsEx news = new NewsEx(DateTime.Now, this.id, record.Instrument.Id, NewsUrgency.Flash, "", "", quoteRequest.ToFormattedString());
-            news.ResponseType = XAPI.ResponseType.OnRtnQuoteRequest;
-            news.UserData = quoteRequest;
-            EmitData(news);
+            foreach (var _id in record.Ids)
+            {
+                NewsEx news = new NewsEx(DateTime.Now, this.id, _id, NewsUrgency.Flash, "", "", quoteRequest.ToFormattedString());
+
+                news.ResponseType = XAPI.ResponseType.OnRtnQuoteRequest;
+                news.UserData = quoteRequest;
+                EmitData(news);
+            }
         }
 
         private void QueryAccountPositionInstrument_Logined()
         {
-            ReqQueryField query = default(ReqQueryField);
+            // OnRtnError:[XErrorID = 0; RawErrorID = 90; Text = CTP:查询未就绪，请稍后重试; Source = OnRspError]
+            Thread thread2 = new Thread(QueryAccountPositionInstrument_Thread);
+            thread2.Start();
+        }
+
+        private void QueryAccountPositionInstrument_Thread()
+        {
+            
+
+            ReqQueryField query = new ReqQueryField();
             query.PortfolioID1 = DefaultPortfolioID1;
             query.PortfolioID2 = DefaultPortfolioID2;
             query.PortfolioID3 = DefaultPortfolioID3;
             query.Business = DefaultBusiness;
 
-            // 查持仓，查资金
-            if (IsApiConnected(_QueryApi))
-            {
-                _QueryApi.ReqQuery(QueryType.ReqQryTradingAccount, ref query);
-                _QueryApi.ReqQuery(QueryType.ReqQryInvestorPosition, ref query);
-            }
-
             // 查合约
             if (IsApiConnected(_ItApi))
             {
-                _ItApi.ReqQuery(QueryType.ReqQryInstrument, ref query);
+                Thread.Sleep(3000);
+                _ItApi.ReqQuery(QueryType.ReqQryInstrument, query);
+            }
+
+            // 查持仓，查资金
+            if (IsApiConnected(_QueryApi))
+            {
+                Thread.Sleep(3000);
+                _QueryApi.ReqQuery(QueryType.ReqQryTradingAccount, query);
+            }
+
+            if (IsApiConnected(_QueryApi))
+            {
+                Thread.Sleep(3000);
+                _QueryApi.ReqQuery(QueryType.ReqQryInvestorPosition, query);
             }
         }
+
+
 
         private void QueryAccountPosition_OnTimer()
         {
             if (!IsApiConnected(_QueryApi))
                 return;
 
-            ReqQueryField query = default(ReqQueryField);
+            ReqQueryField query = new ReqQueryField();
             query.PortfolioID1 = DefaultPortfolioID1;
             query.PortfolioID2 = DefaultPortfolioID2;
             query.PortfolioID3 = DefaultPortfolioID3;
@@ -552,14 +579,14 @@ namespace QuantBox.APIProvider.Single
             _QueryAccountCount -= (int)_Timer.Interval / 1000;
             if (_QueryAccountCount <= 0)
             {
-                _QueryApi.ReqQuery(QueryType.ReqQryTradingAccount, ref query);
+                _QueryApi.ReqQuery(QueryType.ReqQryTradingAccount, query);
                 _QueryAccountCount = _QueryAccountInterval;
             }
 
             _QueryPositionCount -= (int)_Timer.Interval / 1000;
             if (_QueryPositionCount <= 0)
             {
-                _QueryApi.ReqQuery(QueryType.ReqQryInvestorPosition, ref query);
+                _QueryApi.ReqQuery(QueryType.ReqQryInvestorPosition, query);
                 _QueryPositionCount = _QueryPositionInterval;
             }
         }

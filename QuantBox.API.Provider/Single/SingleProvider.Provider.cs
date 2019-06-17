@@ -11,9 +11,6 @@ using System.Threading.Tasks;
 using XAPI;
 using XAPI.Callback;
 
-//using System.Threading.Tasks.Dataflow;
-
-
 namespace QuantBox.APIProvider.Single
 {
     public partial class SingleProvider:Provider
@@ -38,7 +35,8 @@ namespace QuantBox.APIProvider.Single
 
         ~SingleProvider()
         {
-            Save();
+            // OQ多开时，其中一个改了，另一个关闭会导致保存丢失
+            // Save();
         }
 
         private static JsonSerializerSettings jSetting = new JsonSerializerSettings()
@@ -64,8 +62,9 @@ namespace QuantBox.APIProvider.Single
             // 以下初始化的值在，初始化后由软件读取文件中的参数据后又设置回来
             LastPricePlusNTicks = 10;
             EmitBidAsk = true;
+            EmitLevel2Snapshot = false;
             //UpdateInstrument = true;
-            EnableEmitHistoricalData = true;
+            EnablEmitHistoricalData = true;
             FilterDateTime = true;
             EnableEmitData = true;
             HasPriceLimit = true;
@@ -88,7 +87,7 @@ namespace QuantBox.APIProvider.Single
             historicalDataIds = new Dictionary<string,int>();
 
             // ConfigPath在做Setting时已经做了
-            Load();
+            //Load();
         }
 
         void SessionTimeList_ListChanged(object sender, ListChangedEventArgs e)
@@ -139,7 +138,7 @@ namespace QuantBox.APIProvider.Single
             }
         }
 
-        internal void Save()
+        public void Save()
         {
             Save(ConfigPath, "SessionTimeList.json", SessionTimeList);
             Save(ConfigPath, "ServerList.json", ServerList);
@@ -147,7 +146,7 @@ namespace QuantBox.APIProvider.Single
             Save(ConfigPath, "ApiList.json", ApiList);
         }
 
-        private void Load()
+        public void Load()
         {
             SessionTimeList = new BindingList<SessionTimeItem>();
             UserList = new BindingList<UserItem>();
@@ -188,22 +187,24 @@ namespace QuantBox.APIProvider.Single
         private int _QueryAccountCount = 0;
         private int _QueryPositionCount = 0;
 
-        public override void Connect()
+        protected override void OnConnect()
         {
+            Load();
+
             _QueryAccountCount = _QueryAccountInterval;
             _QueryPositionCount = _QueryPositionInterval;
 
             // 启动重连定时器
             _Timer.Elapsed -= _Timer_Elapsed;
             // 改小用来测试连接销毁，用完要改回去
-            _Timer.Interval = 20 * 1000;
+            _Timer.Interval = 30 * 1000;
             _Timer.Enabled = true;
             _Timer.Elapsed += _Timer_Elapsed;
 
             xlog.Info("重连检测定时器开启，检测频率(毫秒):{0}", _Timer.Interval);
             _Connect(true);
         }
-        public override void Disconnect()
+        protected override void OnDisconnect()
         {
             // 关闭重连定时器
             _Timer.Elapsed -= _Timer_Elapsed;
@@ -212,6 +213,8 @@ namespace QuantBox.APIProvider.Single
             xlog.Info("重连检测定时器关闭");
 
             _Disconnect(true);
+
+            Save();
         }
 
         public override void Clear()
